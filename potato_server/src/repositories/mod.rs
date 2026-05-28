@@ -8,10 +8,9 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOr
 use crate::entities::{chunks, rooms};
 use crate::state::{ChunkInfos, Room};
 
-pub async fn persist_chunk(db: &DatabaseConnection, id: String, data: Vec<u8>) {
+pub async fn register_chunk(db: &DatabaseConnection, id: String) {
     let model = chunks::ActiveModel {
         id: Set(id),
-        data: Set(data),
         room_id: Set(None),
         file_name: Set(None),
         chunk_order: Set(None),
@@ -19,20 +18,32 @@ pub async fn persist_chunk(db: &DatabaseConnection, id: String, data: Vec<u8>) {
     let _ = chunks::Entity::insert(model)
         .on_conflict(
             OnConflict::column(chunks::Column::Id)
-                .update_column(chunks::Column::Data)
+                .do_nothing()
                 .to_owned(),
         )
         .exec(db)
         .await;
 }
 
-pub async fn fetch_chunk(db: &DatabaseConnection, id: &str) -> Option<Vec<u8>> {
-    chunks::Entity::find_by_id(id)
-        .one(db)
-        .await
-        .ok()
-        .flatten()
-        .map(|c| c.data)
+pub async fn expired_chunk_ids(db: &DatabaseConnection) -> Result<Vec<String>, sea_orm::DbErr> {
+    use sea_orm::{DbBackend, FromQueryResult, Statement};
+
+    #[derive(FromQueryResult)]
+    struct ChunkIdRow {
+        id: String,
+    }
+
+    let rows = ChunkIdRow::find_by_statement(Statement::from_string(
+        DbBackend::Postgres,
+        "SELECT c.id FROM chunks c \
+         JOIN rooms r ON c.room_id = r.id \
+         WHERE r.expires_at < NOW()"
+            .to_owned(),
+    ))
+    .all(db)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| r.id).collect())
 }
 
 pub async fn create_room(db: &DatabaseConnection, id: String) {

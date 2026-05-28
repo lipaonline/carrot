@@ -2,6 +2,7 @@ mod entities;
 mod handlers;
 mod repositories;
 mod state;
+mod storage;
 
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use axum::{
 use logs::Logs;
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
 use state::AppState;
+use storage::BunnyStorage;
 use tokio::time::interval;
 
 async fn setup_schema(db: &DatabaseConnection) {
@@ -29,8 +31,7 @@ async fn setup_schema(db: &DatabaseConnection) {
             id          TEXT    PRIMARY KEY,
             room_id     TEXT    REFERENCES rooms(id) ON DELETE CASCADE,
             file_name   TEXT,
-            chunk_order INTEGER,
-            data        BYTEA   NOT NULL
+            chunk_order INTEGER
         )"
         .to_owned(),
     ))
@@ -38,21 +39,19 @@ async fn setup_schema(db: &DatabaseConnection) {
     .expect("Failed to create chunks table");
 }
 
-fn setup_purge_task(db: DatabaseConnection) {
+fn setup_purge_task(db: DatabaseConnection, storage: BunnyStorage) {
     tokio::spawn(async move {
-        loop {
-            run_purge_task(db.clone()).await;
-        }
+        run_purge_task(db, storage).await;
     });
 }
 
-async fn run_purge_task(db: DatabaseConnection) {
+async fn run_purge_task(db: DatabaseConnection, storage: BunnyStorage) {
     let mut ticker = interval(Duration::from_mins(30));
 
     loop {
         ticker.tick().await;
 
-        match purge_expired_rooms(&db).await {
+        match purge_expired_rooms(&db, &storage).await {
             Ok(count) if count > 0 => {
                 logs::info!("Purged {} expired rooms", count);
             }
@@ -64,15 +63,27 @@ async fn run_purge_task(db: DatabaseConnection) {
     }
 }
 
-async fn purge_expired_rooms(db: &DatabaseConnection) -> Result<u64, sea_orm::DbErr> {
-    // Les chunks sont supprimés en CASCADE si ta FK est bien configurée
+async fn purge_expired_rooms(
+    db: &DatabaseConnection,
+    storage: &BunnyStorage,
+) -> Result<u64, sea_orm::DbErr> {
+    // Snapshot the chunk IDs about to be deleted so we can also remove their
+    // blobs from Bunny Storage. Storage deletes are best-effort: a failure
+    // logs a warning but does not abort the room purge.
+    let chunk_ids = repositories::expired_chunk_ids(db).await?;
+
     let output = db
         .execute(Statement::from_string(
             DbBackend::Postgres,
             "DELETE FROM rooms WHERE expires_at < NOW()".to_owned(),
         ))
-        .await
-        .expect("Failed delete expired rooms");
+        .await?;
+
+    for chunk_id in &chunk_ids {
+        if let Err(e) = storage.delete(chunk_id).await {
+            logs::warn!("Failed to delete chunk {} from storage: {}", chunk_id, e);
+        }
+    }
 
     Ok(output.rows_affected())
 }
@@ -90,9 +101,11 @@ async fn main() {
 
     setup_schema(&db).await;
 
-    setup_purge_task(db.clone());
+    let storage = BunnyStorage::from_env();
 
-    let state = AppState { db };
+    setup_purge_task(db.clone(), storage.clone());
+
+    let state = AppState { db, storage };
 
     let app = Router::new()
         .route("/chunks/{id}", post(handlers::save_chunk))

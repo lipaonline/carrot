@@ -8,7 +8,6 @@ pub struct Model {
     pub room_id: Option<String>,
     pub file_name: Option<String>,
     pub chunk_order: Option<i32>,
-    pub data: Vec<u8>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

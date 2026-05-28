@@ -15,8 +15,15 @@ pub async fn save_chunk(
     Path(id): Path<String>,
     bytes: Bytes,
 ) -> Result<(), StatusCode> {
-    println!("Received chunk with id: {} and size: {}", id, bytes.len());
-    repositories::persist_chunk(&state.db, id, bytes.to_vec()).await;
+    let size = bytes.len();
+    println!("Received chunk with id: {} and size: {}", id, size);
+
+    if let Err(e) = state.storage.put(&id, bytes.to_vec()).await {
+        eprintln!("Failed to upload chunk {} to storage: {}", id, e);
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    repositories::register_chunk(&state.db, id).await;
     Ok(())
 }
 
@@ -24,14 +31,18 @@ pub async fn get_chunk(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Vec<u8>, StatusCode> {
-    match repositories::fetch_chunk(&state.db, &id).await {
-        Some(data) => {
+    match state.storage.get(&id).await {
+        Ok(Some(data)) => {
             println!("Retrieved chunk with id: {} and size: {}", id, data.len());
             Ok(data)
         }
-        None => {
+        Ok(None) => {
             eprintln!("Chunk with id: {} not found", id);
             Err(StatusCode::NOT_FOUND)
+        }
+        Err(e) => {
+            eprintln!("Failed to fetch chunk {} from storage: {}", id, e);
+            Err(StatusCode::BAD_GATEWAY)
         }
     }
 }
