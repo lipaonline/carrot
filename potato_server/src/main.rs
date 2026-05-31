@@ -13,6 +13,7 @@ use logs::Logs;
 use state::AppState;
 use storage::BunnyStorage;
 use tokio::time::interval;
+use tower_http::cors::{Any, CorsLayer};
 
 fn setup_purge_task(storage: BunnyStorage) {
     tokio::spawn(async move {
@@ -48,12 +49,22 @@ async fn main() {
 
     let state = AppState { storage };
 
+    // The web client is served from a different origin than the API, so the
+    // browser requires CORS headers. The API is stateless (no cookies/auth),
+    // so a permissive policy is safe; tighten allow_origin to the web app's
+    // domain if you ever want to lock it down.
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     let app = Router::new()
         .route("/chunks/{id}", post(handlers::save_chunk))
         .route("/chunks/{id}", get(handlers::get_chunk))
         .route("/rooms/{id}", post(handlers::create_room))
         .route("/rooms/{id}", get(handlers::get_room_content))
         .route("/rooms/{id}/chunks", post(handlers::add_chunk_to_room))
+        .layer(cors)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
