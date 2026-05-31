@@ -1,11 +1,11 @@
 {
-    "name": "potato",
-    "short_name": "potato",
+    "name": "Carrot",
+    "short_name": "Carrot",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#ffffff",
     "theme_color": "#ffffff",
-    "description": "A new Flutter project.",
+    "description": "Carrot — easy cross-platform file transfer. Based on an idea by Potato.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

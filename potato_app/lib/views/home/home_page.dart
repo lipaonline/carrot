@@ -54,6 +54,14 @@ class HomePage extends ConsumerWidget {
                   context.tr('app_description'),
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w400),
                 ),
+                Text(
+                  context.tr('app_credit'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
+                    color: Colors.brown.shade400,
+                  ),
+                ),
                 const Spacer(),
                 Image.asset('assets/images/potato_mascot.png', width: 256),
                 const Spacer(),

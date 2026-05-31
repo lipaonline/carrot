@@ -17,7 +17,7 @@ class PotatoApp extends StatelessWidget {
       localizationsDelegates: context.localizationDelegates,
       supportedLocales: context.supportedLocales,
       locale: context.locale,
-      title: 'Potato',
+      title: 'Carrot',
       onGenerateTitle: (context) => context.tr('app_title'),
       theme: ThemeData(primarySwatch: Colors.brown),
       routes: {'/files': (context) => const FilesPage()},

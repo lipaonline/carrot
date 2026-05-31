@@ -1,6 +1,7 @@
 {
-    "app_title": "Potato",
+    "app_title": "Carrot",
     "app_description": "Push Over The Air To",
+    "app_credit": "Based on an idea by Potato",
     "send_file": "Send file",
     "see_files": "See files",
     "select_file_type": "Select file type",

@@ -1,6 +1,7 @@
 {
-    "app_title": "Potato",
+    "app_title": "Carrot",
     "app_description": "Push Over The Air To",
+    "app_credit": "D'après une idée de Potato",
     "send_file": "Envoyer un fichier",
     "see_files": "Voir les fichiers",
     "select_file_type": "Sélectionnez le type de fichier",
