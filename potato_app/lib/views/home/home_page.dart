@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:potato/models/data/room.dart';
 import 'package:potato/models/encryption/encryption_service.dart';
+import 'package:potato/models/share_link.dart';
 import 'package:potato/viewmodels/chunks_repository_provider.dart';
 import 'package:potato/viewmodels/loading_state_provider.dart';
 import 'package:potato/viewmodels/rooms_repository_provider.dart';
@@ -134,7 +135,11 @@ class HomePage extends ConsumerWidget {
               context.tr('share_code_to_download'),
               textAlign: TextAlign.center,
             ),
-            QrImageView(data: code, version: QrVersions.auto, size: 180.0),
+            QrImageView(
+              data: buildShareValue(code),
+              version: QrVersions.auto,
+              size: 180.0,
+            ),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [

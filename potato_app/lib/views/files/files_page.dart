@@ -9,6 +9,7 @@ import 'package:gal/gal.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:potato/models/data/room.dart';
 import 'package:potato/models/encryption/encryption_service.dart';
+import 'package:potato/models/share_link.dart';
 import 'package:potato/viewmodels/chunk_infos_bytes_provider.dart';
 import 'package:potato/viewmodels/room_provider.dart';
 import 'package:potato/viewmodels/short_codes_history_provider.dart';
@@ -18,7 +19,11 @@ import 'package:potato/views/success/success_dialog.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 class FilesPage extends ConsumerStatefulWidget {
-  const FilesPage({super.key});
+  const FilesPage({super.key, this.initialCode});
+
+  /// Code to open immediately, e.g. coming from a scanned share link
+  /// (`<app>/?code=CODE`). When set, the page jumps straight to the room.
+  final String? initialCode;
 
   @override
   ConsumerState<FilesPage> createState() => _FilesPageState();
@@ -27,6 +32,19 @@ class FilesPage extends ConsumerStatefulWidget {
 class _FilesPageState extends ConsumerState<FilesPage> {
   final _codeController = TextEditingController();
   String? _activeCode;
+
+  @override
+  void initState() {
+    super.initState();
+    final code = widget.initialCode?.trim();
+    if (code != null && code.isNotEmpty) {
+      _activeCode = code;
+      _codeController.text = code;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(shortCodeHistoryProvider.notifier).historizeCode(code);
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -162,7 +180,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         content: SizedBox(
           width: double.maxFinite,
           height: 280,
-          child: Center(child: QrImageView(data: code, size: 200)),
+          child: Center(
+            child: QrImageView(data: buildShareValue(code), size: 200),
+          ),
         ),
       ),
     );
@@ -183,8 +203,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
             Expanded(
               child: MobileScanner(
                 onDetect: (capture) {
-                  final code = capture.barcodes.first.displayValue;
-                  Navigator.of(context).pop(code);
+                  final scanned = capture.barcodes.first.displayValue;
+                  Navigator.of(
+                    context,
+                  ).pop(scanned == null ? null : extractCode(scanned));
                 },
               ),
             ),

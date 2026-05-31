@@ -8,6 +8,11 @@ class PotatoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A scanned share link opens the app at `<base>/?code=CODE`; jump straight
+    // to the matching room instead of the home page.
+    final initialCode = Uri.base.queryParameters['code'];
+    final hasInitialCode = initialCode != null && initialCode.isNotEmpty;
+
     return MaterialApp(
       localizationsDelegates: context.localizationDelegates,
       supportedLocales: context.supportedLocales,
@@ -15,11 +20,10 @@ class PotatoApp extends StatelessWidget {
       title: 'Potato',
       onGenerateTitle: (context) => context.tr('app_title'),
       theme: ThemeData(primarySwatch: Colors.brown),
-      routes: {
-        '/': (context) => const HomePage(),
-        '/files': (context) => const FilesPage(),
-      },
-      initialRoute: '/',
+      routes: {'/files': (context) => const FilesPage()},
+      home: hasInitialCode
+          ? FilesPage(initialCode: initialCode)
+          : const HomePage(),
     );
   }
 }
