@@ -1,104 +1,171 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use sea_orm::sea_query::{Expr, OnConflict};
-use sea_orm::sqlx::types::chrono::Utc;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set};
-
-use crate::entities::{chunks, rooms};
 use crate::state::{ChunkInfos, Room};
+use crate::storage::BunnyStorage;
 
-pub async fn register_chunk(db: &DatabaseConnection, id: String) {
-    let model = chunks::ActiveModel {
-        id: Set(id),
-        room_id: Set(None),
-        file_name: Set(None),
-        chunk_order: Set(None),
-    };
-    let _ = chunks::Entity::insert(model)
-        .on_conflict(
-            OnConflict::column(chunks::Column::Id)
-                .do_nothing()
-                .to_owned(),
-        )
-        .exec(db)
-        .await;
+/// How long a room lives after it is first created.
+const ROOM_TTL_SECS: u64 = 3600;
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
-pub async fn expired_chunk_ids(db: &DatabaseConnection) -> Result<Vec<String>, sea_orm::DbErr> {
-    use sea_orm::{DbBackend, FromQueryResult, Statement};
-
-    #[derive(FromQueryResult)]
-    struct ChunkIdRow {
-        id: String,
+/// Path-safe, deterministic encoding of a file name so it can be used as an
+/// object key. The authoritative file name lives inside the manifest body, so
+/// this only needs to be unique per file and free of path separators.
+fn hex(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 2);
+    for byte in input.bytes() {
+        out.push_str(&format!("{byte:02x}"));
     }
-
-    let rows = ChunkIdRow::find_by_statement(Statement::from_string(
-        DbBackend::Postgres,
-        "SELECT c.id FROM chunks c \
-         JOIN rooms r ON c.room_id = r.id \
-         WHERE r.expires_at < NOW()"
-            .to_owned(),
-    ))
-    .all(db)
-    .await?;
-
-    Ok(rows.into_iter().map(|r| r.id).collect())
+    out
 }
 
-pub async fn create_room(db: &DatabaseConnection, id: String) {
-    let expires_at = Utc::now() + Duration::from_hours(1);
-    let model = rooms::ActiveModel {
-        id: Set(id),
-        expires_at: Set(expires_at),
-    };
-    let _ = rooms::Entity::insert(model)
-        .on_conflict(
-            OnConflict::column(rooms::Column::Id)
-                .do_nothing()
-                .to_owned(),
-        )
-        .exec(db)
-        .await;
+fn marker_key(room_id: &str) -> String {
+    format!("rooms/{room_id}/.created")
 }
 
-pub async fn add_chunk_to_room(db: &DatabaseConnection, room_id: String, chunk_info: ChunkInfos) {
-    create_room(db, room_id.clone()).await;
+fn manifest_key(room_id: &str, file_name: &str) -> String {
+    format!("rooms/{room_id}/{}.json", hex(file_name))
+}
 
-    for (order, chunk_id) in chunk_info.chunks.iter().enumerate() {
-        let _ = chunks::Entity::update_many()
-            .col_expr(chunks::Column::RoomId, Expr::value(room_id.clone()))
-            .col_expr(
-                chunks::Column::FileName,
-                Expr::value(chunk_info.file_name.clone()),
-            )
-            .col_expr(chunks::Column::ChunkOrder, Expr::value(order as i32))
-            .filter(chunks::Column::Id.eq(chunk_id.clone()))
-            .exec(db)
-            .await;
+/// Create a room by writing an expiry marker. Idempotent: an existing marker is
+/// left untouched so the original expiry (and thus the TTL) is preserved.
+pub async fn create_room(storage: &BunnyStorage, room_id: &str) {
+    let key = marker_key(room_id);
+
+    match storage.get(&key).await {
+        Ok(Some(_)) => {} // already created — keep the original expiry
+        Ok(None) => {
+            let expires_at = now_secs() + ROOM_TTL_SECS;
+            if let Err(e) = storage.put(&key, expires_at.to_string().into_bytes()).await {
+                logs::warn!("Failed to create room marker {}: {}", key, e);
+            }
+        }
+        Err(e) => logs::warn!("Failed to read room marker {}: {}", key, e),
     }
 }
 
-pub async fn get_room_content(db: &DatabaseConnection, room_id: &str) -> Room {
-    let rows = chunks::Entity::find()
-        .filter(chunks::Column::RoomId.eq(room_id))
-        .order_by_asc(chunks::Column::ChunkOrder)
-        .all(db)
+/// Attach a file (a set of ordered chunk ids) to a room by storing its manifest.
+pub async fn add_chunk_to_room(storage: &BunnyStorage, room_id: &str, chunk_info: ChunkInfos) {
+    create_room(storage, room_id).await;
+
+    let key = manifest_key(room_id, &chunk_info.file_name);
+    match serde_json::to_vec(&chunk_info) {
+        Ok(body) => {
+            if let Err(e) = storage.put(&key, body).await {
+                logs::warn!("Failed to write manifest {}: {}", key, e);
+            }
+        }
+        Err(e) => logs::error!("Failed to serialize manifest for {}: {}", key, e),
+    }
+}
+
+/// Read a room's content by listing its directory and parsing every manifest.
+/// Files are returned in a stable (file-name) order.
+pub async fn get_room_content(storage: &BunnyStorage, room_id: &str) -> Room {
+    let entries = storage
+        .list(&format!("rooms/{room_id}"))
         .await
         .unwrap_or_default();
 
-    // Group chunk IDs by file name, preserving chunk_order via the query ordering above.
-    let mut file_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for row in rows {
-        if let Some(file_name) = row.file_name {
-            file_map.entry(file_name).or_default().push(row.id);
+    let mut file_map: BTreeMap<String, ChunkInfos> = BTreeMap::new();
+    for entry in entries {
+        if entry.is_directory || !entry.object_name.ends_with(".json") {
+            continue;
+        }
+
+        let key = format!("rooms/{room_id}/{}", entry.object_name);
+        match storage.get(&key).await {
+            Ok(Some(body)) => match serde_json::from_slice::<ChunkInfos>(&body) {
+                Ok(info) => {
+                    file_map.insert(info.file_name.clone(), info);
+                }
+                Err(e) => logs::warn!("Failed to parse manifest {}: {}", key, e),
+            },
+            Ok(None) => {}
+            Err(e) => logs::warn!("Failed to read manifest {}: {}", key, e),
         }
     }
 
-    let chunks_infos = file_map
-        .into_iter()
-        .map(|(file_name, chunks)| ChunkInfos { file_name, chunks })
-        .collect();
+    Room {
+        chunks_infos: file_map.into_values().collect(),
+    }
+}
 
-    Room { chunks_infos }
+/// Delete every room whose expiry marker is in the past, along with its chunk
+/// blobs and manifests. Returns the number of rooms purged.
+pub async fn purge_expired_rooms(storage: &BunnyStorage) -> Result<u64, reqwest::Error> {
+    let now = now_secs();
+    let rooms = storage.list("rooms").await?;
+    let mut purged = 0u64;
+
+    for room in rooms {
+        if !room.is_directory {
+            continue;
+        }
+        let room_id = &room.object_name;
+
+        let expired = match storage.get(&marker_key(room_id)).await? {
+            Some(body) => String::from_utf8_lossy(&body)
+                .trim()
+                .parse::<u64>()
+                .map(|expires_at| expires_at < now)
+                .unwrap_or(false),
+            None => false,
+        };
+        if !expired {
+            continue;
+        }
+
+        purge_room(storage, room_id).await;
+        purged += 1;
+    }
+
+    Ok(purged)
+}
+
+/// Delete all objects belonging to a single room: the chunk blobs referenced by
+/// its manifests, then the manifests and the expiry marker. Deletes are
+/// best-effort — a failure logs a warning but does not abort the purge.
+async fn purge_room(storage: &BunnyStorage, room_id: &str) {
+    let entries = storage
+        .list(&format!("rooms/{room_id}"))
+        .await
+        .unwrap_or_default();
+
+    for entry in &entries {
+        if entry.is_directory {
+            continue;
+        }
+
+        let key = format!("rooms/{room_id}/{}", entry.object_name);
+
+        // For manifests, also delete the chunk blobs they reference.
+        if entry.object_name.ends_with(".json") {
+            if let Ok(Some(body)) = storage.get(&key).await {
+                if let Ok(info) = serde_json::from_slice::<ChunkInfos>(&body) {
+                    for chunk_id in &info.chunks {
+                        if let Err(e) = storage.delete(chunk_id).await {
+                            logs::warn!("Failed to delete chunk {} from storage: {}", chunk_id, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Err(e) = storage.delete(&key).await {
+            logs::warn!("Failed to delete object {} from storage: {}", key, e);
+        }
+    }
+
+    // Remove the now-empty room directory itself; Bunny keeps empty directories
+    // in listings otherwise, so they would pile up and be re-scanned forever.
+    if let Err(e) = storage.delete(&format!("rooms/{room_id}/")).await {
+        logs::warn!("Failed to delete room directory {}: {}", room_id, e);
+    }
 }

@@ -23,7 +23,6 @@ pub async fn save_chunk(
         return Err(StatusCode::BAD_GATEWAY);
     }
 
-    repositories::register_chunk(&state.db, id).await;
     Ok(())
 }
 
@@ -48,7 +47,7 @@ pub async fn get_chunk(
 }
 
 pub async fn create_room(State(state): State<AppState>, Path(id): Path<String>) {
-    repositories::create_room(&state.db, id).await;
+    repositories::create_room(&state.storage, &id).await;
 }
 
 pub async fn get_room_content(
@@ -56,7 +55,7 @@ pub async fn get_room_content(
     Path(id): Path<String>,
 ) -> Result<Json<Room>, StatusCode> {
     println!("Fetching content for room with id: {}", id);
-    Ok(Json(repositories::get_room_content(&state.db, &id).await))
+    Ok(Json(repositories::get_room_content(&state.storage, &id).await))
 }
 
 pub async fn add_chunk_to_room(
@@ -68,5 +67,5 @@ pub async fn add_chunk_to_room(
         "Adding chunk with file name: {} to room with id: {}",
         chunk_info.file_name, room_id
     );
-    repositories::add_chunk_to_room(&state.db, room_id, chunk_info).await;
+    repositories::add_chunk_to_room(&state.storage, &room_id, chunk_info).await;
 }

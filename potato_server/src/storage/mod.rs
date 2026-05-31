@@ -1,4 +1,13 @@
 use reqwest::{Client, StatusCode};
+use serde::Deserialize;
+
+/// A single entry returned by Bunny Storage's directory listing endpoint.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListEntry {
+    pub object_name: String,
+    pub is_directory: bool,
+}
 
 #[derive(Clone)]
 pub struct BunnyStorage {
@@ -52,6 +61,31 @@ impl BunnyStorage {
 
         let bytes = response.error_for_status()?.bytes().await?;
         Ok(Some(bytes.to_vec()))
+    }
+
+    /// List the objects directly under `prefix` (a directory). Bunny returns
+    /// an empty body / 404 for a missing directory, which we map to an empty
+    /// list. The trailing slash is required for Bunny to treat it as a folder.
+    pub async fn list(&self, prefix: &str) -> Result<Vec<ListEntry>, reqwest::Error> {
+        let url = if prefix.is_empty() {
+            format!("{}/", self.base_url)
+        } else {
+            format!("{}/{}/", self.base_url, prefix)
+        };
+
+        let response = self
+            .client
+            .get(url)
+            .header("AccessKey", &self.access_key)
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+
+        let entries = response.error_for_status()?.json::<Vec<ListEntry>>().await?;
+        Ok(entries)
     }
 
     pub async fn delete(&self, key: &str) -> Result<(), reqwest::Error> {

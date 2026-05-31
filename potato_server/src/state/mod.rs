@@ -1,11 +1,9 @@
-use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::storage::BunnyStorage;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: DatabaseConnection,
     pub storage: BunnyStorage,
 }
 

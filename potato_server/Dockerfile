@@ -17,8 +17,6 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/potato_server .
 
-ENV DATABASE_URL=postgres://postgres:postgres@localhost/postgres
-
 EXPOSE 3000
 
 CMD ["./potato_server"]
