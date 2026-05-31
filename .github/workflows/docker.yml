@@ -4,7 +4,12 @@ on:
   push:
     branches:
       - main
-      - feat/web
+
+# Public deployment URLs, baked into the web build (not secrets — they are
+# visible in the shipped JS anyway). Update these if the Bunny URLs change.
+env:
+  BACKEND_URL: https://mc-xhcmvvio1b.bunny.run
+  WEB_APP_URL: https://mc-ivyvxr78cn.bunny.run
 
 jobs:
   build-and-push-app:
@@ -19,6 +24,8 @@ jobs:
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
+        with:
+          channel: stable
 
       - name: Install dependencies
         working-directory: ./potato_app
@@ -26,14 +33,16 @@ jobs:
 
       - name: Build Web
         working-directory: ./potato_app
-        run: flutter build web --release --dart-define=BACKEND_URL=${{ secrets.BACKEND_URL }} --dart-define=ENCRYPTION_SALT=${{ secrets.ENCRYPTION_SALT }}
+        run: flutter build web --release --dart-define=BACKEND_URL=$BACKEND_URL --dart-define=WEB_APP_URL=$WEB_APP_URL
 
-      - name: Build and push Docker image
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push web image
         working-directory: ./potato_app
         run: |
-          docker login --username PiotrFLEURY --password ${{ secrets.GITHUB_TOKEN }} ghcr.io
-          docker build -t ghcr.io/piotrfleury/potato:potato-app-latest .
-          docker push ghcr.io/piotrfleury/potato:potato-app-latest
+          docker build --platform linux/amd64 -t ghcr.io/lipaonline/carrot-web:latest .
+          docker push ghcr.io/lipaonline/carrot-web:latest
 
   build-and-push-server:
     runs-on: ubuntu-latest
@@ -45,9 +54,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Build and push Docker image
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push server image
         working-directory: ./potato_server
         run: |
-          docker login --username PiotrFLEURY --password ${{ secrets.GITHUB_TOKEN }} ghcr.io
-          docker build -t ghcr.io/piotrfleury/potato:potato-server-latest .
-          docker push ghcr.io/piotrfleury/potato:potato-server-latest
+          docker build --platform linux/amd64 -t ghcr.io/lipaonline/carrot-server:latest .
+          docker push ghcr.io/lipaonline/carrot-server:latest
